@@ -1,0 +1,8 @@
+[package]
+name = "btc-lib"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+btc-lib-proc-macros = { workspace = true }
+sha2 = "0.10.8"

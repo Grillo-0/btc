@@ -1,0 +1,11 @@
+[package]
+name = "btc"
+version = { workspace = true }
+edition = { workspace = true }
+
+[[bin]]
+name = "jj"
+path = "src/main.rs"
+
+[dependencies]
+btc-lib = { workspace = true }
