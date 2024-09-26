@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::thread::sleep;
-use std::time::{Duration};
+use std::time::Duration;
 
 use btc_lib::*;
 
@@ -57,6 +57,8 @@ fn main() -> std::io::Result<()> {
 
     send_message(&mut stream, BitcoinMsg::verack())?;
 
+    send_message(&mut stream, BitcoinMsg::ping(6969))?;
+
     send_message(&mut stream, BitcoinMsg::getaddr())?;
 
     loop {
@@ -78,6 +80,13 @@ fn main() -> std::io::Result<()> {
             }),
             BitcoinPayload::Ping(x) => {
                 send_message(&mut stream, BitcoinMsg::pong(x))?;
+            }
+            BitcoinPayload::Pong(x) => {
+                if x == 6969 {
+                    println!("Received Pong!");
+                } else {
+                    panic!();
+                }
             }
             BitcoinPayload::Addr(addrs) => {
                 println!("{:#?} nodes connected", addrs.addr_list.len());

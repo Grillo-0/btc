@@ -471,15 +471,27 @@ impl BitcoinType for BitcoinMsg {
 
 impl BitcoinMsg {
     pub fn getaddr() -> BitcoinMsg {
-        BitcoinMsg{payload: BitcoinPayload::GetAddr}
+        BitcoinMsg {
+            payload: BitcoinPayload::GetAddr,
+        }
+    }
+
+    pub fn ping(nonce: u64) -> BitcoinMsg {
+        BitcoinMsg {
+            payload: BitcoinPayload::Ping(nonce),
+        }
     }
 
     pub fn pong(nonce: u64) -> BitcoinMsg {
-        BitcoinMsg{payload: BitcoinPayload::Pong(nonce)}
+        BitcoinMsg {
+            payload: BitcoinPayload::Pong(nonce),
+        }
     }
 
     pub fn verack() -> BitcoinMsg {
-        BitcoinMsg{payload: BitcoinPayload::VerAck}
+        BitcoinMsg {
+            payload: BitcoinPayload::VerAck,
+        }
     }
 
     pub fn version(
