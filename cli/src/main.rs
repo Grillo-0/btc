@@ -79,9 +79,11 @@ fn main() -> std::io::Result<()> {
             BitcoinPayload::Ping(x) => {
                 send_message(&mut stream, BitcoinMsg::pong(x))?;
             }
-            BitcoinPayload::Addr(x) => {
-                println!("{:#?} nodes connected", x.addr_list.len());
-                println!("{:#?}", x);
+            BitcoinPayload::Addr(addrs) => {
+                println!("{:#?} nodes connected", addrs.addr_list.len());
+                for addr in addrs.addr_list {
+                    println!("{}: {}", addr.timestamp, addr.addr.addr);
+                }
             }
             _ => println!("Message not covered: {msg:?}"),
         };
