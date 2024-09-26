@@ -1,12 +1,11 @@
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::thread::sleep;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration};
 
 use btc_lib::*;
 
-pub fn send_message(stream: &mut TcpStream, payload: BitcoinPayload) -> std::io::Result<()> {
-    let msg = BitcoinMsg { payload };
+pub fn send_message(stream: &mut TcpStream, msg: BitcoinMsg) -> std::io::Result<()> {
     let blob = msg.to_blob();
     stream.write_all(&blob)?;
     Ok(())
@@ -28,23 +27,20 @@ pub fn read_message(stream: &mut TcpStream) -> std::io::Result<BitcoinMsg> {
 fn main() -> std::io::Result<()> {
     let mut stream = TcpStream::connect("203.11.72.155:8333")?;
 
-    let version = BitcoinPayload::Version(Version {
-        proto_ver: 70014,
-        time: SystemTime::now(),
-        services: Default::default(),
-        remote: NetAddr {
-            services: Default::default(),
-            addr: stream.peer_addr()?,
-        },
-        local: NetAddr {
+    let version = BitcoinMsg::version(
+        NetAddr {
             services: Default::default(),
             addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8333),
         },
-        nonce: 69,
-        user_agent: "My own bitcoin client".to_string(),
-        last_block: 0,
-        relay: true,
-    });
+        NetAddr {
+            services: Default::default(),
+            addr: stream.peer_addr()?,
+        },
+        "my bitcoin client".to_string(),
+        69,
+        0,
+        true,
+    );
 
     send_message(&mut stream, version)?;
 
@@ -59,9 +55,9 @@ fn main() -> std::io::Result<()> {
         panic!();
     }
 
-    send_message(&mut stream, BitcoinPayload::VerAck)?;
+    send_message(&mut stream, BitcoinMsg::verack())?;
 
-    send_message(&mut stream, BitcoinPayload::GetAddr)?;
+    send_message(&mut stream, BitcoinMsg::getaddr())?;
 
     loop {
         let mut msg = read_message(&mut stream);
@@ -81,7 +77,7 @@ fn main() -> std::io::Result<()> {
                 print!("\n");
             }),
             BitcoinPayload::Ping(x) => {
-                send_message(&mut stream, BitcoinPayload::Pong(x))?;
+                send_message(&mut stream, BitcoinMsg::pong(x))?;
             }
             BitcoinPayload::Addr(x) => {
                 println!("{:#?} nodes connected", x.addr_list.len());

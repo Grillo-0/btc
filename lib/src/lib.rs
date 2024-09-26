@@ -7,7 +7,7 @@ use sha2::Sha256;
 
 use btc_lib_proc_macros::BitcoinType;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Scanner {
     bytes: Vec<u8>,
     it: usize,
@@ -34,7 +34,7 @@ pub trait BitcoinType {
     fn from_blob(blob: &mut Scanner) -> Self;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InventoryKind {
     Error,
     Tx,
@@ -46,7 +46,7 @@ pub enum InventoryKind {
     FilteredWitnessBlock,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InventoryElement {
     pub kind: InventoryKind,
     pub hash: [u8; 32],
@@ -247,7 +247,7 @@ impl<T: BitcoinType> BitcoinType for Vec<T> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Services {
     pub network: bool,
     pub getutxo: bool,
@@ -310,13 +310,13 @@ impl BitcoinType for SocketAddr {
     }
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct NetAddr {
     pub services: Services,
     pub addr: SocketAddr,
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct Version {
     pub proto_ver: u32,
     pub services: Services,
@@ -329,34 +329,34 @@ pub struct Version {
     pub relay: bool,
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct SendCmpct {
     pub flag: bool,
     pub integer: u64,
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct FeeFilter {
     pub feerate: u64,
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct Inv {
     pub inventory: Vec<InventoryElement>,
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct AddrElement {
     pub timestamp: u32,
     pub addr: NetAddr,
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct Addr {
     pub addr_list: Vec<AddrElement>,
 }
 
-#[derive(Debug, BitcoinType)]
+#[derive(Debug, Clone, BitcoinType)]
 pub struct BitcoinHeader {
     pub magic: [u8; 4],
     pub command: [u8; 12],
@@ -364,7 +364,7 @@ pub struct BitcoinHeader {
     pub check_sum: [u8; 4],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BitcoinPayload {
     Version(Version),
     VerAck,
@@ -378,7 +378,7 @@ pub enum BitcoinPayload {
     Addr(Addr),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BitcoinMsg {
     pub payload: BitcoinPayload,
 }
@@ -466,5 +466,42 @@ impl BitcoinType for BitcoinMsg {
         };
 
         BitcoinMsg { payload }
+    }
+}
+
+impl BitcoinMsg {
+    pub fn getaddr() -> BitcoinMsg {
+        BitcoinMsg{payload: BitcoinPayload::GetAddr}
+    }
+
+    pub fn pong(nonce: u64) -> BitcoinMsg {
+        BitcoinMsg{payload: BitcoinPayload::Pong(nonce)}
+    }
+
+    pub fn verack() -> BitcoinMsg {
+        BitcoinMsg{payload: BitcoinPayload::VerAck}
+    }
+
+    pub fn version(
+        local: NetAddr,
+        remote: NetAddr,
+        user_agent: String,
+        nonce: u64,
+        last_block: u32,
+        relay: bool,
+    ) -> BitcoinMsg {
+        BitcoinMsg {
+            payload: BitcoinPayload::Version(Version {
+                proto_ver: 70014,
+                time: SystemTime::now(),
+                services: local.services.clone(),
+                remote,
+                local,
+                nonce,
+                user_agent,
+                last_block,
+                relay,
+            }),
+        }
     }
 }
