@@ -113,7 +113,7 @@ fn gen_to_blob(atributes: &Vec<TokenTree>) -> Vec<TokenTree> {
     gen_func("to_blob", args, body, ret)
 }
 
-fn gen_from_blob(atributes: &Vec<TokenTree>) -> Vec<TokenTree> {
+fn gen_from_blob(atributes: &[TokenTree]) -> Vec<TokenTree> {
     let args = vec![
         Ident::new("blob", Span::call_site()).into(),
         Punct::new(':', Spacing::Alone).into(),
@@ -122,7 +122,7 @@ fn gen_from_blob(atributes: &Vec<TokenTree>) -> Vec<TokenTree> {
         Ident::new("Scanner", Span::call_site()).into(),
     ];
 
-    let atribs = atributes.into_iter();
+    let atribs = atributes.iter();
     let atribs = atribs.flat_map(|at| {
         [
             at.clone(),

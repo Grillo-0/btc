@@ -432,7 +432,7 @@ impl BitcoinType for BitcoinMsg {
         blob.extend(check_sum);
         blob.extend(payload);
 
-        return blob;
+        blob
     }
 
     fn from_blob(blob: &mut Scanner) -> Self {
