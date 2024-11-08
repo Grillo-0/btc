@@ -67,10 +67,16 @@ impl LogMsg {
     }
 }
 
-fn bitcoin_handling(rx: Receiver<BitcoinMsg>, tx: Sender<LogMsg>) -> std::io::Result<()> {
+enum ClientCommand {
+    SendBtcMsg(BitcoinMsg),
+}
+
+fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io::Result<()> {
     let mut stream = None;
 
-    for btc_msg in rx.iter() {
+    for cmd in rx.iter() {
+        let ClientCommand::SendBtcMsg(btc_msg) = cmd;
+
         if let BitcoinPayload::Version(ref ver) = btc_msg.payload {
             let mut s = TcpStream::connect(ver.remote.addr)?;
 
@@ -105,7 +111,9 @@ fn bitcoin_handling(rx: Receiver<BitcoinMsg>, tx: Sender<LogMsg>) -> std::io::Re
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
 
     loop {
-        for btc_msg in rx.try_iter() {
+        for cmd in rx.try_iter() {
+            let ClientCommand::SendBtcMsg(btc_msg) = cmd;
+
             match btc_msg.payload {
                 BitcoinPayload::Version(_) => {
                     tx.send(LogMsg::err("Already connected!")).unwrap();
@@ -265,7 +273,7 @@ fn main() -> std::io::Result<()> {
                                             true,
                                         );
 
-                                        tx.send(msg).unwrap();
+                                        tx.send(ClientCommand::SendBtcMsg(msg)).unwrap();
                                     }
                                     Err(e) => log_tx
                                         .send(LogMsg::err(format!(
@@ -280,7 +288,9 @@ fn main() -> std::io::Result<()> {
                         Some("ping") => {
                             if let Some(value) = command_parsed.next() {
                                 match value.parse() {
-                                    Ok(value) => tx.send(BitcoinMsg::ping(value)).unwrap(),
+                                    Ok(value) => tx
+                                        .send(ClientCommand::SendBtcMsg(BitcoinMsg::ping(value)))
+                                        .unwrap(),
                                     Err(e) => log_tx
                                         .send(LogMsg::err(format!(
                                             "Could not parse value \"{value}\": {e}"
@@ -293,7 +303,9 @@ fn main() -> std::io::Result<()> {
                                     .unwrap();
                             };
                         }
-                        Some("getaddr") => tx.send(BitcoinMsg::getaddr()).unwrap(),
+                        Some("getaddr") => tx
+                            .send(ClientCommand::SendBtcMsg(BitcoinMsg::getaddr()))
+                            .unwrap(),
                         Some(cmd) => log_tx
                             .send(LogMsg::err(format!("No command \"{cmd}\" no found")))
                             .unwrap(),
