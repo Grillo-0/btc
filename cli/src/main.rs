@@ -127,6 +127,16 @@ impl Client {
         }
     }
 
+    fn handle_cmds(&mut self, cmd: ClientCommand) -> Result<()> {
+        match cmd {
+            ClientCommand::SendBtcMsg(btc_msg) => self.send_msg_cmd(btc_msg)?,
+            ClientCommand::Connect(addr) => self.connect(addr)?,
+            ClientCommand::Disconnect => self.disconnect()?,
+        }
+
+        Ok(())
+    }
+
     fn send_msg_cmd(&mut self, btc_msg: BitcoinMsg) -> Result<()> {
         match btc_msg.payload {
             BitcoinPayload::Version(_) => {
@@ -218,10 +228,12 @@ impl Client {
 fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> Result<()> {
     loop {
         for cmd in rx.try_iter() {
-            match cmd {
-                ClientCommand::SendBtcMsg(btc_msg) => client.send_msg_cmd(btc_msg)?,
-                ClientCommand::Connect(addr) => client.connect(addr)?,
-                ClientCommand::Disconnect => client.disconnect()?,
+            if let Err(e) = client.handle_cmds(cmd) {
+                if let ErrorKind::IoErr(_) = e.kind {
+                    return Err(e);
+                } else if let Some(msg) = e.msg {
+                        client.log_tx.send(LogMsg::err(msg)).unwrap();
+                }
             }
         }
 
