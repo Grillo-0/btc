@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::result;
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::{self, Receiver};
@@ -13,6 +14,39 @@ use crossterm::ExecutableCommand;
 use crossterm::{cursor, style, QueueableCommand};
 
 use btc_lib::*;
+
+#[derive(Debug)]
+enum ErrorKind {
+    IoErr(io::Error),
+    NotConnected,
+}
+
+#[derive(Debug)]
+struct Error {
+    kind: ErrorKind,
+    msg: Option<String>,
+}
+
+impl Error {
+    fn new(kind: ErrorKind) -> Error {
+        Error { kind, msg: None }
+    }
+
+    fn with_msg(kind: ErrorKind, msg: impl ToString) -> Error {
+        Error {
+            kind,
+            msg: Some(msg.to_string()),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::new(ErrorKind::IoErr(e))
+    }
+}
+
+type Result<T> = result::Result<T, Error>;
 
 enum LogMsgKind {
     Info,
@@ -58,23 +92,20 @@ struct Client {
 }
 
 impl Client {
-    fn send_msg(&mut self, msg: BitcoinMsg) -> std::io::Result<()> {
+    fn send_msg(&mut self, msg: BitcoinMsg) -> Result<()> {
         if let Some(stream) = &mut self.stream {
             let blob = msg.to_blob();
             stream.write_all(&blob)?;
+            Ok(())
         } else {
-            self.log_tx
-                .send(LogMsg::err(format!(
-                    "Could not send message {:#?}, client not connected",
-                    msg
-                )))
-                .unwrap();
+            Err(Error::with_msg(
+                ErrorKind::NotConnected,
+                format!("Could not send message {:#?}, client not connected", msg),
+            ))
         }
-
-        Ok(())
     }
 
-    fn read_msg(&mut self) -> std::io::Result<Option<BitcoinMsg>> {
+    fn read_msg(&mut self) -> Result<BitcoinMsg> {
         if let Some(stream) = &mut self.stream {
             let mut header = vec![0; 24];
             stream.peek(&mut header)?;
@@ -84,19 +115,17 @@ impl Client {
             stream.read_exact(&mut msg)?;
 
             let msg = BitcoinMsg::from_blob(&mut Scanner::new(msg));
-            Ok(Some(msg))
+            Ok(msg)
         } else {
-            self.log_tx
-                .send(LogMsg::err(
-                    "Could not receive message, client not connected",
-                ))
-                .unwrap();
-            Ok(None)
+            Err(Error::with_msg(
+                ErrorKind::NotConnected,
+                "Could not receive message, client not connected",
+            ))
         }
     }
 }
 
-fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io::Result<()> {
+fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> Result<()> {
     for cmd in rx.iter() {
         let ClientCommand::SendBtcMsg(btc_msg) = cmd;
 
@@ -105,18 +134,12 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io:
 
             client.send_msg(btc_msg)?;
 
-            if let Some(BitcoinMsg {
-                payload: BitcoinPayload::Version(_),
-            }) = client.read_msg()?
-            {
+            if let BitcoinPayload::Version(_) = client.read_msg()?.payload {
             } else {
                 panic!()
             }
 
-            if let Some(BitcoinMsg {
-                payload: BitcoinPayload::VerAck,
-            }) = client.read_msg()?
-            {
+            if let BitcoinPayload::VerAck = client.read_msg()?.payload {
             } else {
                 panic!();
             }
@@ -173,7 +196,19 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io:
 
         let msg = client.read_msg();
 
-        if let Err(e) = msg {
+        if let Err(Error {
+            kind: ErrorKind::NotConnected,
+            ..
+        }) = msg
+        {
+            continue;
+        }
+
+        if let Err(Error {
+            kind: ErrorKind::IoErr(e),
+            ..
+        }) = msg
+        {
             match e.kind() {
                 io::ErrorKind::WouldBlock => (),
                 io::ErrorKind::TimedOut => (),
@@ -186,7 +221,7 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io:
             continue;
         }
 
-        let msg = msg.unwrap().unwrap();
+        let msg = msg.unwrap();
 
         match msg.payload {
             BitcoinPayload::Inv(p) => {
