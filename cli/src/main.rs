@@ -71,9 +71,12 @@ enum ClientCommand {
     SendBtcMsg(BitcoinMsg),
 }
 
-fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io::Result<()> {
-    let mut stream = None;
+struct Client {
+    stream: Option<TcpStream>,
+    log_tx: Sender<LogMsg>,
+}
 
+fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io::Result<()> {
     for cmd in rx.iter() {
         let ClientCommand::SendBtcMsg(btc_msg) = cmd;
 
@@ -94,19 +97,21 @@ fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io:
 
             send_message(&mut s, BitcoinMsg::verack())?;
 
-            stream = Some(s);
+            client.stream = Some(s);
 
             break;
         }
     }
 
-    let mut stream = stream.unwrap();
+    let mut stream = client.stream.unwrap();
 
-    tx.send(LogMsg::info(format!(
-        "Connected to address {}",
-        stream.peer_addr().unwrap()
-    )))
-    .unwrap();
+    client
+        .log_tx
+        .send(LogMsg::info(format!(
+            "Connected to address {}",
+            stream.peer_addr().unwrap()
+        )))
+        .unwrap();
 
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
 
@@ -116,17 +121,26 @@ fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io:
 
             match btc_msg.payload {
                 BitcoinPayload::Version(_) => {
-                    tx.send(LogMsg::err("Already connected!")).unwrap();
+                    client
+                        .log_tx
+                        .send(LogMsg::err("Already connected!"))
+                        .unwrap();
                     continue;
                 }
                 BitcoinPayload::Ping(x) => {
-                    tx.send(LogMsg::info(format!("Sending ping with value {x}")))
+                    client
+                        .log_tx
+                        .send(LogMsg::info(format!("Sending ping with value {x}")))
                         .unwrap();
                 }
                 BitcoinPayload::GetAddr => {
-                    tx.send(LogMsg::info("Sending getaddr command")).unwrap();
+                    client
+                        .log_tx
+                        .send(LogMsg::info("Sending getaddr command"))
+                        .unwrap();
                 }
-                _ => tx
+                _ => client
+                    .log_tx
                     .send(LogMsg::warn(format!("Sending {btc_msg:?}")))
                     .unwrap(),
             }
@@ -140,7 +154,8 @@ fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io:
             match e.kind() {
                 io::ErrorKind::WouldBlock => (),
                 io::ErrorKind::TimedOut => (),
-                _ => tx
+                _ => client
+                    .log_tx
                     .send(LogMsg::err(format!("Failed to read Message: {e}")))
                     .unwrap(),
             };
@@ -152,11 +167,13 @@ fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io:
 
         match msg.payload {
             BitcoinPayload::Inv(p) => {
-                tx.send(LogMsg::info(format!(
-                    "Got {} new objects",
-                    p.inventory.len()
-                )))
-                .unwrap();
+                client
+                    .log_tx
+                    .send(LogMsg::info(format!(
+                        "Got {} new objects",
+                        p.inventory.len()
+                    )))
+                    .unwrap();
 
                 for inv in p.inventory.iter() {
                     let mut send_str = String::new();
@@ -164,22 +181,26 @@ fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io:
                     for x in inv.hash.iter().rev() {
                         write!(send_str, "{x:02x}").unwrap();
                     }
-                    tx.send(LogMsg::info(send_str)).unwrap();
+                    client.log_tx.send(LogMsg::info(send_str)).unwrap();
                 }
             }
             BitcoinPayload::Ping(x) => {
                 send_message(&mut stream, BitcoinMsg::pong(x))?;
             }
             BitcoinPayload::Pong(x) => {
-                tx.send(LogMsg::info(format!("Received pong with value {x}")))
+                client
+                    .log_tx
+                    .send(LogMsg::info(format!("Received pong with value {x}")))
                     .unwrap();
             }
             BitcoinPayload::Addr(addrs) => {
-                tx.send(LogMsg::info(format!(
-                    "Found {:#?} nodes",
-                    addrs.addr_list.len()
-                )))
-                .unwrap();
+                client
+                    .log_tx
+                    .send(LogMsg::info(format!(
+                        "Found {:#?} nodes",
+                        addrs.addr_list.len()
+                    )))
+                    .unwrap();
                 for addr in addrs.addr_list {
                     let time_since = SystemTime::now()
                         .duration_since(
@@ -187,17 +208,20 @@ fn bitcoin_handling(rx: Receiver<ClientCommand>, tx: Sender<LogMsg>) -> std::io:
                         )
                         .unwrap()
                         .as_secs();
-                    tx.send(LogMsg::info(format!(
-                        "addr: {}, timestamp: {}h{}m{}s",
-                        addr.addr.addr,
-                        time_since / 3600,
-                        (time_since % 3600) / 60,
-                        time_since % 60,
-                    )))
-                    .unwrap();
+                    client
+                        .log_tx
+                        .send(LogMsg::info(format!(
+                            "addr: {}, timestamp: {}h{}m{}s",
+                            addr.addr.addr,
+                            time_since / 3600,
+                            (time_since % 3600) / 60,
+                            time_since % 60,
+                        )))
+                        .unwrap();
                 }
             }
-            _ => tx
+            _ => client
+                .log_tx
                 .send(LogMsg::warn(format!("Could not handle message {msg:?}")))
                 .unwrap(),
         };
@@ -209,10 +233,18 @@ const COMMAND_AREA_ROWS: u16 = 2;
 fn main() -> std::io::Result<()> {
     let (log_tx, rx) = mpsc::channel();
 
-    let (tx, rx_) = mpsc::channel();
+    let (tx, cmd_rx) = mpsc::channel();
 
     let log_tx_clone = log_tx.clone();
-    let _handle = thread::spawn(move || bitcoin_handling(rx_, log_tx_clone));
+    let _handle = thread::spawn(move || {
+        bitcoin_handling(
+            Client {
+                stream: None,
+                log_tx: log_tx_clone,
+            },
+            cmd_rx,
+        )
+    });
 
     let mut stdout = io::stdout();
     terminal::enable_raw_mode()?;
