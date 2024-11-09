@@ -19,6 +19,7 @@ use btc_lib::*;
 enum ErrorKind {
     IoErr(io::Error),
     NotConnected,
+    ProtocolErr,
 }
 
 #[derive(Debug)]
@@ -84,6 +85,7 @@ impl LogMsg {
 
 enum ClientCommand {
     SendBtcMsg(BitcoinMsg),
+    Connect(SocketAddr),
 }
 
 struct Client {
@@ -123,75 +125,90 @@ impl Client {
             ))
         }
     }
+
+    fn send_msg_cmd(&mut self, btc_msg: BitcoinMsg) -> Result<()> {
+        match btc_msg.payload {
+            BitcoinPayload::Version(_) => {
+                self.log_tx.send(LogMsg::err("Already connected!")).unwrap();
+            }
+            BitcoinPayload::Ping(x) => {
+                self.log_tx
+                    .send(LogMsg::info(format!("Sending ping with value {x}")))
+                    .unwrap();
+            }
+            BitcoinPayload::GetAddr => {
+                self.log_tx
+                    .send(LogMsg::info("Sending getaddr command"))
+                    .unwrap();
+            }
+            _ => self
+                .log_tx
+                .send(LogMsg::warn(format!("Sending {btc_msg:?}")))
+                .unwrap(),
+        }
+
+        self.send_msg(btc_msg)?;
+
+        Ok(())
+    }
+
+    fn connect(&mut self, addr: SocketAddr) -> Result<()> {
+        self.stream = TcpStream::connect(addr).ok();
+
+        let msg = BitcoinMsg::version(
+            NetAddr {
+                services: Default::default(),
+                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8333),
+            },
+            NetAddr {
+                services: Default::default(),
+                addr,
+            },
+            "my bitcoin client".to_string(),
+            69,
+            0,
+            true,
+        );
+
+        self.send_msg(msg)?;
+
+        if let BitcoinPayload::Version(_) = self.read_msg()?.payload {
+        } else {
+            return Err(Error::new(ErrorKind::ProtocolErr));
+        }
+
+        if let BitcoinPayload::VerAck = self.read_msg()?.payload {
+        } else {
+            return Err(Error::new(ErrorKind::ProtocolErr));
+        }
+
+        self.send_msg(BitcoinMsg::verack())?;
+
+        if let Some(stream) = &self.stream {
+            stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+
+            self.log_tx
+                .send(LogMsg::info(format!(
+                    "Connected to address {}",
+                    stream.peer_addr().unwrap()
+                )))
+                .unwrap();
+        } else {
+            unreachable!()
+        }
+
+        Ok(())
+    }
+
 }
 
 fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> Result<()> {
-    for cmd in rx.iter() {
-        let ClientCommand::SendBtcMsg(btc_msg) = cmd;
-
-        if let BitcoinPayload::Version(ref ver) = btc_msg.payload {
-            client.stream = Some(TcpStream::connect(ver.remote.addr)?);
-
-            client.send_msg(btc_msg)?;
-
-            if let BitcoinPayload::Version(_) = client.read_msg()?.payload {
-            } else {
-                panic!()
-            }
-
-            if let BitcoinPayload::VerAck = client.read_msg()?.payload {
-            } else {
-                panic!();
-            }
-
-            client.send_msg(BitcoinMsg::verack())?;
-
-            break;
-        }
-    }
-
-    if let Some(stream) = &client.stream {
-        client
-            .log_tx
-            .send(LogMsg::info(format!(
-                "Connected to address {}",
-                stream.peer_addr().unwrap()
-            )))
-            .unwrap();
-        stream.set_read_timeout(Some(Duration::from_millis(100)))?;
-    }
-
     loop {
         for cmd in rx.try_iter() {
-            let ClientCommand::SendBtcMsg(btc_msg) = cmd;
-
-            match btc_msg.payload {
-                BitcoinPayload::Version(_) => {
-                    client
-                        .log_tx
-                        .send(LogMsg::err("Already connected!"))
-                        .unwrap();
-                    continue;
-                }
-                BitcoinPayload::Ping(x) => {
-                    client
-                        .log_tx
-                        .send(LogMsg::info(format!("Sending ping with value {x}")))
-                        .unwrap();
-                }
-                BitcoinPayload::GetAddr => {
-                    client
-                        .log_tx
-                        .send(LogMsg::info("Sending getaddr command"))
-                        .unwrap();
-                }
-                _ => client
-                    .log_tx
-                    .send(LogMsg::warn(format!("Sending {btc_msg:?}")))
-                    .unwrap(),
+            match cmd {
+                ClientCommand::SendBtcMsg(btc_msg) => client.send_msg_cmd(btc_msg)?,
+                ClientCommand::Connect(addr) => client.connect(addr)?,
             }
-
-            client.send_msg(btc_msg)?;
         }
 
         let msg = client.read_msg();
@@ -344,27 +361,7 @@ fn main() -> std::io::Result<()> {
                         Some("connect") => {
                             if let Some(addr) = command_parsed.next() {
                                 match SocketAddr::from_str(addr) {
-                                    Ok(addr) => {
-                                        let msg = BitcoinMsg::version(
-                                            NetAddr {
-                                                services: Default::default(),
-                                                addr: SocketAddr::new(
-                                                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-                                                    8333,
-                                                ),
-                                            },
-                                            NetAddr {
-                                                services: Default::default(),
-                                                addr,
-                                            },
-                                            "my bitcoin client".to_string(),
-                                            69,
-                                            0,
-                                            true,
-                                        );
-
-                                        tx.send(ClientCommand::SendBtcMsg(msg)).unwrap();
-                                    }
+                                    Ok(addr) => tx.send(ClientCommand::Connect(addr)).unwrap(),
                                     Err(e) => log_tx
                                         .send(LogMsg::err(format!(
                                             "Could not parse address \"{addr}\": {e}",
