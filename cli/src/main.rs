@@ -14,25 +14,6 @@ use crossterm::{cursor, style, QueueableCommand};
 
 use btc_lib::*;
 
-pub fn send_message(stream: &mut TcpStream, msg: BitcoinMsg) -> std::io::Result<()> {
-    let blob = msg.to_blob();
-    stream.write_all(&blob)?;
-    Ok(())
-}
-
-pub fn read_message(stream: &mut TcpStream) -> std::io::Result<BitcoinMsg> {
-    let mut header = vec![0; 24];
-    stream.peek(&mut header)?;
-    let header = BitcoinHeader::from_blob(&mut Scanner::new(header));
-
-    let mut msg = vec![0; 24 + header.size as usize];
-    stream.read_exact(&mut msg)?;
-
-    let msg = BitcoinMsg::from_blob(&mut Scanner::new(msg));
-
-    Ok(msg)
-}
-
 enum LogMsgKind {
     Info,
     Warn,
@@ -76,44 +57,86 @@ struct Client {
     log_tx: Sender<LogMsg>,
 }
 
+impl Client {
+    fn send_msg(&mut self, msg: BitcoinMsg) -> std::io::Result<()> {
+        if let Some(stream) = &mut self.stream {
+            let blob = msg.to_blob();
+            stream.write_all(&blob)?;
+        } else {
+            self.log_tx
+                .send(LogMsg::err(format!(
+                    "Could not send message {:#?}, client not connected",
+                    msg
+                )))
+                .unwrap();
+        }
+
+        Ok(())
+    }
+
+    fn read_msg(&mut self) -> std::io::Result<Option<BitcoinMsg>> {
+        if let Some(stream) = &mut self.stream {
+            let mut header = vec![0; 24];
+            stream.peek(&mut header)?;
+            let header = BitcoinHeader::from_blob(&mut Scanner::new(header));
+
+            let mut msg = vec![0; 24 + header.size as usize];
+            stream.read_exact(&mut msg)?;
+
+            let msg = BitcoinMsg::from_blob(&mut Scanner::new(msg));
+            Ok(Some(msg))
+        } else {
+            self.log_tx
+                .send(LogMsg::err(
+                    "Could not receive message, client not connected",
+                ))
+                .unwrap();
+            Ok(None)
+        }
+    }
+}
+
 fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io::Result<()> {
     for cmd in rx.iter() {
         let ClientCommand::SendBtcMsg(btc_msg) = cmd;
 
         if let BitcoinPayload::Version(ref ver) = btc_msg.payload {
-            let mut s = TcpStream::connect(ver.remote.addr)?;
+            client.stream = Some(TcpStream::connect(ver.remote.addr)?);
 
-            send_message(&mut s, btc_msg)?;
+            client.send_msg(btc_msg)?;
 
-            if let BitcoinPayload::Version(_) = read_message(&mut s)?.payload {
+            if let Some(BitcoinMsg {
+                payload: BitcoinPayload::Version(_),
+            }) = client.read_msg()?
+            {
             } else {
                 panic!()
             }
 
-            if let BitcoinPayload::VerAck = read_message(&mut s)?.payload {
+            if let Some(BitcoinMsg {
+                payload: BitcoinPayload::VerAck,
+            }) = client.read_msg()?
+            {
             } else {
                 panic!();
             }
 
-            send_message(&mut s, BitcoinMsg::verack())?;
-
-            client.stream = Some(s);
+            client.send_msg(BitcoinMsg::verack())?;
 
             break;
         }
     }
 
-    let mut stream = client.stream.unwrap();
-
-    client
-        .log_tx
-        .send(LogMsg::info(format!(
-            "Connected to address {}",
-            stream.peer_addr().unwrap()
-        )))
-        .unwrap();
-
-    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    if let Some(stream) = &client.stream {
+        client
+            .log_tx
+            .send(LogMsg::info(format!(
+                "Connected to address {}",
+                stream.peer_addr().unwrap()
+            )))
+            .unwrap();
+        stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    }
 
     loop {
         for cmd in rx.try_iter() {
@@ -145,10 +168,10 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io:
                     .unwrap(),
             }
 
-            send_message(&mut stream, btc_msg)?;
+            client.send_msg(btc_msg)?;
         }
 
-        let msg = read_message(&mut stream);
+        let msg = client.read_msg();
 
         if let Err(e) = msg {
             match e.kind() {
@@ -163,7 +186,7 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io:
             continue;
         }
 
-        let msg = msg.unwrap();
+        let msg = msg.unwrap().unwrap();
 
         match msg.payload {
             BitcoinPayload::Inv(p) => {
@@ -185,7 +208,7 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> std::io:
                 }
             }
             BitcoinPayload::Ping(x) => {
-                send_message(&mut stream, BitcoinMsg::pong(x))?;
+                client.send_msg(BitcoinMsg::pong(x))?;
             }
             BitcoinPayload::Pong(x) => {
                 client
