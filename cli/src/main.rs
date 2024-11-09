@@ -86,6 +86,7 @@ impl LogMsg {
 enum ClientCommand {
     SendBtcMsg(BitcoinMsg),
     Connect(SocketAddr),
+    Disconnect,
 }
 
 struct Client {
@@ -200,6 +201,18 @@ impl Client {
         Ok(())
     }
 
+    fn disconnect(&mut self) -> Result<()> {
+        let addr = self.stream.as_ref().map(|s| s.peer_addr());
+        self.stream = None;
+
+        if let Some(addr) = addr {
+            self.log_tx.send(LogMsg::info(format!("Disconnecting from {}", addr?))).unwrap();
+        } else {
+            self.log_tx.send(LogMsg::info("Already Disconnected")).unwrap();
+        }
+
+        Ok(())
+    }
 }
 
 fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> Result<()> {
@@ -208,6 +221,7 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> Result<(
             match cmd {
                 ClientCommand::SendBtcMsg(btc_msg) => client.send_msg_cmd(btc_msg)?,
                 ClientCommand::Connect(addr) => client.connect(addr)?,
+                ClientCommand::Disconnect => client.disconnect()?,
             }
         }
 
@@ -372,6 +386,9 @@ fn main() -> std::io::Result<()> {
                                 log_tx.send(LogMsg::err("addr not provided!")).unwrap();
                             };
                         }
+                        Some("disconnect") => tx
+                            .send(ClientCommand::Disconnect)
+                            .unwrap(),
                         Some("ping") => {
                             if let Some(value) = command_parsed.next() {
                                 match value.parse() {
