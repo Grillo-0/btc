@@ -247,19 +247,15 @@ fn bitcoin_handling(mut client: Client, rx: Receiver<ClientCommand>) -> Result<(
             continue;
         }
 
-        if let Err(Error {
-            kind: ErrorKind::IoErr(e),
-            ..
-        }) = msg
-        {
-            match e.kind() {
-                io::ErrorKind::WouldBlock => (),
-                io::ErrorKind::TimedOut => (),
+        if let Err(e) = msg {
+            match e.kind {
+                ErrorKind::IoErr(e) if io::ErrorKind::TimedOut == e.kind() => (),
+                ErrorKind::IoErr(e) if io::ErrorKind::WouldBlock == e.kind() => (),
                 _ => client
                     .log_tx
-                    .send(LogMsg::err(format!("Failed to read Message: {e}")))
+                    .send(LogMsg::err(format!("Failed to read Message: {e:?}")))
                     .unwrap(),
-            };
+            }
 
             continue;
         }
